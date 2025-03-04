@@ -141,7 +141,7 @@ class SPLoRA:
                     dis.append(dist.item())
                     idx += 1
         if show_info:
-            print(f"{i} layers are projected, cosine threshold is {thrs_cos}, and Pdst is {numpy.mean(dis)} (> 0.8 is better).")
-            # print(f"{i} layers are projected, cosine threshold is {thrs_cos}")
+            
+            print(f"{i} layers are projected, cosine threshold is {thrs_cos}")
         return self.peft_model, cos_total
 
