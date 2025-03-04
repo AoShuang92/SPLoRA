@@ -26,22 +26,22 @@ from sklearn.preprocessing import normalize
 
 
 
-class SafeLoRA:
+class SPLoRA:
     def __init__(self, peft_model:torch.nn.Module, config):
         """
         Please use safelora.model to get the projected model.
 
-        How to use SafeLoRA:
-        path = './LLM_Models/llama-2-7b-chat-fp16/' # load your base model of the peft model
+        How to use SPLoRA:
+        path = './LLM_Models/llama-2-7b-chat/' # load your base model of the peft model
         model = AutoModelForCausalLM.from_pretrained(path)
-        pmodel = PeftModel.from_pretrained(model, 'finetuneLLM/finetuned_models/samsumBad-7b-fp16-peft-seed-42/',torch_dtype=torch.float16) #load peft model
+        pmodel = PeftModel.from_pretrained(model, 'ft_path_name',torch_dtype=torch.float16) #load peft model
 
         SafeLoRAConfig.base_model_path = './LLM_Models/llama-2-7b-hf/'  #you should modify the path
-        SafeLoRAConfig.aligned_model_path = './LLM_Models/llama-2-7b-chat-fp16/' #you should modify the path
+        SafeLoRAConfig.aligned_model_path = './LLM_Models/llama-2-7b-chat/' #you should modify the path
 
-        safelora = SafeLoRA(pmodel, SafeLoRAConfig)
+        SPlora = SPLoRA(pmodel, SPLoRAConfig)
 
-        Finally, you can get the projected model by "safelora.model".
+        Finally, you can get the projected model by "splora.model".
         """
         super().__init__()
         self.peft_model = peft_model
@@ -50,21 +50,14 @@ class SafeLoRA:
         print("self.peft_config", self.peft_config)
         self.model_ori = copy.deepcopy(peft_model)
         project_matrix = self.get_aligned_matrix()
-        # print('project_matrix0000', len(project_matrix), project_matrix[0].shape)64, ([4096, 4096])
-        print("self.config.select_layers_type", self.config.select_layers_type)
 
         if self.config.select_layers_type == 'threshold':
-            print("threshold", self.config.select_layers_type)
             self.model, _ = self.projected_weighted(project_matrix, self.config.threshold, show_info=True)
 
         elif self.config.select_layers_type == 'number':
             model, cos = self.projected_weighted(project_matrix, 0.3, show_info=False)
-            # print('cos', cos, len(cos)) 64
-            print("cos", cos)
-            thrs = numpy.sort(cos)[:self.config.num_proj_layers][-1]
-            # thrs = numpy.sort(cos)[:5][-1]
-            # thrs = numpy.sort(cos)[::-1][:self.config.num_proj_layers][-1] 
-            print("thrs", thrs) 
+            
+            thrs = numpy.sort(cos)[::-1][:self.config.num_proj_layers][-1] 
             self.model, _ = self.projected_weighted(project_matrix, thrs, show_info=True)
         else:
             raise ValueError("The method of select_layer_type should be threshold or number.")
@@ -99,11 +92,8 @@ class SafeLoRA:
                 # print("b_param", b_param.shape, a_param.shape)[4096, 4096]
                 assert b_param.shape == a_param.shape, "The dimensions of the base model's weight should be the same with the aligned model's weight."
                 vec = a_param - b_param
-                # print("vec", vec.shape) ([4096, 4096])
-                # print("vec", vec) all 0
                 vec = vec.to(self.config.devices)
                 vec = torch.mm(vec, vec.t()) / torch.norm(vec)
-                # print("vec", vec.shape)([4096, 4096])
                 v.append((vec).detach().cpu())
         print("v final", len(v)) 
         return v
@@ -117,62 +107,26 @@ class SafeLoRA:
         cos_total = []
         for (name, param),(name_ori, param_ori) in zip(self.peft_model.named_parameters(), self.model_ori.named_parameters()):
             if 'lora' in name:
-                # print("if lora", param.shape[0], self.peft_config.r) 8 8 / 4096 8
                 if param.shape[0] == self.peft_config.r:
-                    # print("shape equal")
+                   
                     B = copy.deepcopy(param_ori)
-                    # print("B", B.shape) [8, 4096]
-                if param.shape[0] != self.peft_config.r:
-                    # print("shape NOT equal")
-                    # print("v[idx]", v[idx].shape)
-                    P = v[idx].to(param.device)
-                    # print("P", P.shape) ([4096, 4096])
-                    # print("param_ori.data", param_ori.data.shape) [4096, 8]
-                    W = torch.mm(P, param_ori.data)
-                    # print("W", W.shape) ([4096, 8])
-                    fW = torch.mm(W, B) 
-                    # print("FW", fW.shape)([4096, 4096])
-                    # print("param_ori", param_ori.shape)[4096, 8]
-                    ori = torch.mm(param_ori, B)
-                    # print("ori", ori.shape) ([4096, 4096])
-                    W_new = torch.mm(P, param_ori.data)
-                    # print("W_new", W_new.shape) ([4096, 8])
-                    # print("W_new", W_new.shape) [2048, 8]
                     
-                    # cos = numpy.round(torch.nn.functional.cosine_similarity(fW.reshape(1,-1), ori.reshape(1,-1)).item(),5)
+                if param.shape[0] != self.peft_config.r:
+                    P = v[idx].to(param.device)
+                    
+                    W = torch.mm(P, param_ori.data)
+                   
+                    fW = torch.mm(W, B) 
+                   
+                    ori = torch.mm(param_ori, B)
+                   
+                    W_new = torch.mm(P, param_ori.data)
+                    
                     weight_samples = [(fW,ori) for _ in range(50)]
                     ediem = compute_diem_torch(fW,ori,weight_samples=weight_samples)
                     ediem_iqr = compute_diem_torch_iqr(fW,ori,weight_samples=weight_samples)
-                    # diem = compute_diem_torch(fW,ori,weight_samples=None)
-
-                    
-                    # diem_values = compute_diem(fW,ori)
-                    # # print("diem_values", diem_values.shape) [4096]
-                    # mad_diem = median_absolute_deviation(diem_values)
-                    # mean_diem, std_diem, entropy_diem = mean_std_entropy(diem_values)
-
-                    # feature_similarity = torch.eye(4096).to(param.device)
-                    # soft_cosine_sim = soft_cosine_similarity(fW, ori, feature_similarity)
-                    # largest_eig, trace_lap, frob_norm = spectral_metrics(soft_cosine_sim)
 
                     cos = ediem_iqr
-
-                    # # Apply ICA transformation
-                    # n_components = 64  # Number of components to extract
-                    
-                    # fW_ica = ica_transform(fW.cpu() , n_components)
-                    # ori_ica = ica_transform(ori.cpu() , n_components)
-
-                    # # Normalize the ICA-transformed embeddings
-                    # fW_ica_normalized = normalize(fW_ica, axis=1)
-                    # ori_ica_normalized = normalize(ori_ica, axis=1)
-
-                    # # Compute cosine similarity between corresponding rows
-                    # cosine_similarities = numpy.array([compute_cosine_similarity(fW_ica_normalized[i], ori_ica_normalized[i]) for i in range(fW_ica_normalized.shape[0])])
-
-                    # # Aggregate the cosine similarities to obtain a single similarity measure
-                    # average_cosine_similarity = numpy.mean(cosine_similarities)
-                    # cos = average_cosine_similarity
                     cos_total.append(cos)
 
                     if cos <=  thrs_cos:
